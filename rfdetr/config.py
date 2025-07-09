@@ -4,7 +4,6 @@
 # Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 
-
 from pydantic import BaseModel
 from typing import List, Optional, Literal, Type
 import torch
@@ -28,7 +27,7 @@ class ModelConfig(BaseModel):
     pretrain_weights: Optional[str] = None
     device: Literal["cpu", "cuda", "mps"] = DEVICE
     resolution: int = 560
-    group_detr: int = 13
+    group_detr: int = 2
     gradient_checkpointing: bool = False
 
 class RFDETRBaseConfig(ModelConfig):
