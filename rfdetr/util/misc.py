@@ -284,12 +284,61 @@ def get_sha():
         pass
     message = f"sha: {sha}, status: {diff}, branch: {branch}"
     return message
+import torch
+import random
+import torch.nn.functional as F
+
+multi_scales = [448, 504, 560, 616, 672, 728, 784, 840]
+def _resize_tensor(img: torch.Tensor, size: int, is_mask: bool = False):
+    """
+    Resize ảnh (B,C,H,W) hoặc mask; hỗ trợ trường hợp C == 0.
+    """
+    if img.numel() == 0 or img.shape[1] == 0:          # C == 0
+        # tạo tensor rỗng mới với kích thước (B, 0, size, size)
+        B = img.shape[0]
+        empty = torch.empty(
+            (B, 0, size, size),
+            dtype=torch.bool if is_mask else img.dtype,
+            device=img.device,
+        )
+        return empty
+
+    mode = "nearest" if is_mask else "bilinear"
+    kwargs = dict(size=(size, size), mode=mode)
+    if mode != "nearest":
+        kwargs["align_corners"] = False
+
+    if is_mask:
+        out = F.interpolate(img.float(), **kwargs).to(torch.bool)
+    else:
+        out = F.interpolate(img, **kwargs)
+
+    return out
 
 
 def collate_fn(batch):
-    batch = list(zip(*batch))
-    batch[0] = nested_tensor_from_tensor_list(batch[0])
-    return tuple(batch)
+    # batch = [(img, target), ...]
+    images, targets = zip(*batch)
+
+    # ----- random scale -----
+    new_sz = random.choice(multi_scales)
+
+    resized_imgs, resized_targets = [], []
+    for img, tgt in zip(images, targets):
+        h0 = img.shape[-2]  # assume CHW
+
+        img = _resize_tensor(img.unsqueeze(0), new_sz) [0]   # CHW
+        tgt_masks = _resize_tensor(tgt["masks"].unsqueeze(0), new_sz, is_mask=True)[0]
+
+        tgt = tgt.copy()
+        tgt["masks"] = tgt_masks
+        resized_imgs.append(img)
+        resized_targets.append(tgt)
+
+    nested = nested_tensor_from_tensor_list(resized_imgs)      # tạo NestedTensor mới
+    return nested, resized_targets
+
+
 
 
 def _max_by_axis(the_list):
