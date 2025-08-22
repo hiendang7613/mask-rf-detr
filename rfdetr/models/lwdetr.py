@@ -25,6 +25,9 @@ from typing import Callable
 import torch
 import torch.nn.functional as F
 from torch import nn
+from typing import Any, Dict, List, Optional, Protocol, Tuple, Union
+from torch import Tensor
+
 
 from rfdetr.util import box_ops
 from rfdetr.util.misc import (NestedTensor, nested_tensor_from_tensor_list,
@@ -34,6 +37,82 @@ from rfdetr.util.misc import (NestedTensor, nested_tensor_from_tensor_list,
 from rfdetr.models.backbone import build_backbone
 from rfdetr.models.matcher import build_matcher
 from rfdetr.models.transformer import build_transformer
+
+from transformers.models.mask2former.modeling_mask2former import  Mask2FormerTransformerModule,\
+Mask2FormerPixelDecoderEncoderMultiscaleDeformableAttention ,\
+Mask2FormerMaskedAttentionDecoderLayer ,\
+Mask2FormerPixelDecoder ,\
+Mask2FormerPixelDecoderEncoderOnly ,\
+Mask2FormerPixelLevelModule
+
+def _init_weights(self, module: nn.Module):
+    xavier_std = self.config.init_xavier_std
+    std = self.config.init_std
+
+    if isinstance(module, Mask2FormerTransformerModule):
+        if module.input_projections is not None:
+            for input_projection in module.input_projections:
+                if not isinstance(input_projection, nn.Sequential):
+                    nn.init.xavier_uniform_(input_projection.weight, gain=xavier_std)
+                    nn.init.constant_(input_projection.bias, 0)
+
+    elif isinstance(module, Mask2FormerPixelDecoderEncoderMultiscaleDeformableAttention):
+        nn.init.constant_(module.sampling_offsets.weight.data, 0.0)
+        thetas = torch.arange(module.n_heads, dtype=torch.int64).float() * (2.0 * math.pi / module.n_heads)
+        grid_init = torch.stack([thetas.cos(), thetas.sin()], -1)
+        grid_init = (
+            (grid_init / grid_init.abs().max(-1, keepdim=True)[0])
+            .view(module.n_heads, 1, 1, 2)
+            .repeat(1, module.n_levels, module.n_points, 1)
+        )
+        for i in range(module.n_points):
+            grid_init[:, :, i, :] *= i + 1
+        with torch.no_grad():
+            module.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
+
+        nn.init.constant_(module.attention_weights.weight.data, 0.0)
+        nn.init.constant_(module.attention_weights.bias.data, 0.0)
+        nn.init.xavier_uniform_(module.value_proj.weight.data)
+        nn.init.constant_(module.value_proj.bias.data, 0.0)
+        nn.init.xavier_uniform_(module.output_proj.weight.data)
+        nn.init.constant_(module.output_proj.bias.data, 0.0)
+
+    elif isinstance(module, Mask2FormerMaskedAttentionDecoderLayer):
+        for p in module.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p, gain=xavier_std)
+
+    elif isinstance(module, Mask2FormerPixelLevelModule):
+        for submodule in module.modules():
+            if isinstance(submodule, (nn.Conv2d, nn.Linear)):
+                submodule.weight.data.normal_(mean=0.0, std=std)
+                if submodule.bias is not None:
+                    submodule.bias.data.zero_()
+
+    elif isinstance(module, Mask2FormerPixelDecoder):
+        for p in module.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+        nn.init.normal_(module.level_embed, std=0)
+
+    elif isinstance(module, Mask2FormerPixelDecoderEncoderOnly):
+        for p in module.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    elif isinstance(module, (nn.Linear, nn.Conv2d, nn.BatchNorm2d)):
+        module.weight.data.normal_(mean=0.0, std=std)
+        if module.bias is not None:
+            module.bias.data.zero_()
+
+    elif isinstance(module, nn.Embedding):
+        module.weight.data.normal_(mean=0.0, std=std)
+        if module.padding_idx is not None:
+            module.weight.data[module.padding_idx].zero_()
+
+    if hasattr(module, "reference_points"):
+        nn.init.xavier_uniform_(module.reference_points.weight.data, gain=1.0)
+        nn.init.constant_(module.reference_points.bias.data, 0.0)
 
 class LWDETR(nn.Module):
     """ This is the Group DETR v3 module that performs object detection """
@@ -104,15 +183,19 @@ class LWDETR(nn.Module):
         from transformers import AutoConfig
         from transformers.models.mask2former.modeling_mask2former import Mask2FormerPixelDecoder, Mask2FormerPixelDecoderOutput
         config = AutoConfig.from_pretrained('facebook/mask2former-swin-tiny-coco-instance')
-        config.encoder_layers=0
-        self.pixel_decoder = Mask2FormerPixelDecoder(config, feature_channels = [256,256,256])
-        self.spatial_proj = nn.ModuleList([
-            nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
-            nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
-            nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
-        ])
+        config.encoder_layers=3
+        config.oversample_ratio=4
+        self.pixel_decoder = Mask2FormerPixelDecoder(config, feature_channels = [256,hidden_dim,256,hidden_dim])
+        self.pixel_decoder.num_feature_levels = 4
+        # self.spatial_proj = nn.ModuleList([
+        #     nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
+        #     nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
+        #     nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
+        # ])
         self.spatial_backbone = torch.load('/content/Hiera_sam2.1_hiera_base_plus.pt', weights_only=False)
-
+        self.avgPool2d = nn.AvgPool2d(2, stride=2)
+        _init_weights(self.pixel_decoder, self.pixel_decoder)
+        self.spatial_proj = nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1))
 
     def reinitialize_detection_head(self, num_classes):
         # Create new classification head
@@ -153,26 +236,57 @@ class LWDETR(nn.Module):
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
+
+        # torch.save(samples, 'samples.pt')
+        # torch.save(targets, 'targets.pt')
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, poss = self.backbone(samples)
-        pixel_values_2 = samples.tensors
+        B, C, H, W = samples.tensors.shape
+        H2 = int(H/14*16)
+        W2 = int(W/14*16)
+        pixel_values_2 = nn.functional.interpolate(samples.tensors, size=(H2, W2), mode="bilinear", align_corners=False)
         features_2 = self.spatial_backbone(pixel_values_2)['backbone_fpn']
 
         srcs = []
-        srcs2 = []
+        # srcs2 = []
         masks = []
         for l, feat in enumerate(features):
             src, mask = feat.decompose()
-            src2 = self.spatial_proj[l](features_2[l])
-            src2 = nn.functional.interpolate(src2, size=src.shape[-2:], mode="bilinear", align_corners=False)
+            # src2 = self.avgPool2d([features_2[0],features_2[2]][l])
+            # src2 = self.avgPool2d(features_2[l])
+            # src2 = nn.functional.interpolate(features_2[l], size=src.shape[-2:], mode="bilinear", align_corners=False)
+
+            # src2 = self.spatial_proj[l](src2)
+            # print('src=', src.shape)
+            # print('src2=', src2.shape)
+            # print('features_2[l]=', features_2[l].shape)
             srcs.append(src)
-            srcs2.append(src2)
+            # srcs2.append(src2)
             masks.append(mask)
             assert mask is not None
-            
-        decoder_output = self.pixel_decoder(features_2)
-
+        
+        pixel_decoder_features = [
+          features_2[0], 
+          srcs[0], 
+          features_2[2], 
+          srcs[1], 
+        ]
+ 
+        decoder_output = self.pixel_decoder(pixel_decoder_features)
+        multi_scale_features = decoder_output['multi_scale_features']
+        srcs = [
+          self.spatial_proj(multi_scale_features[2]), 
+          self.spatial_proj(multi_scale_features[0])
+        ]
+        srcs2 = [
+          self.spatial_proj(self.avgPool2d(multi_scale_features[3])), 
+          self.spatial_proj(self.avgPool2d(multi_scale_features[1]))
+        ]
+        # for x in multi_scale_features:
+        #   print('x=',x.shape)
+        # for x in srcs2:
+        #   print('x=',x.shape)
         if self.training:
             refpoint_embed_weight = self.refpoint_embed.weight
             query_feat_weight = self.query_feat.weight
@@ -186,6 +300,8 @@ class LWDETR(nn.Module):
             pixel_embeddings=decoder_output.mask_features,
             srcs2=srcs2,
             )
+        # print('hs=',hs.shape)
+        # print('masks_queries_logits=',masks_queries_logits[0].shape)
 
         if self.bbox_reparam:
             outputs_coord_delta = self.bbox_embed(hs)
@@ -260,6 +376,20 @@ class LWDETR(nn.Module):
                 module.p = drop_rate
 
 
+def sigmoid_cross_entropy_loss(inputs, labels, num_masks):
+    """
+    inputs : (B, Q, C)  – logits
+    labels : (B, Q, C)  – 0/1 hoặc bool
+    """
+    inputs = inputs.float()
+    labels = labels.float()      # <-- thêm dòng này
+
+    criterion = nn.BCEWithLogitsLoss(reduction="none")
+    loss = criterion(inputs, labels)
+
+    # chuẩn hoá
+    return loss.mean(1).sum() / num_masks
+
 
 def dice_loss(inputs, targets, num_boxes):
    """
@@ -275,6 +405,7 @@ def dice_loss(inputs, targets, num_boxes):
    """
    inputs = inputs.sigmoid()
    inputs = inputs.flatten(1)
+   targets = targets.flatten(1)
    numerator = 2 * (inputs * targets).sum(1)
    denominator = inputs.sum(-1) + targets.sum(-1)
    loss = 1 - (numerator + 1) / (denominator + 1)
@@ -468,7 +599,7 @@ class SetCriterion(nn.Module):
        target_masks = target_masks[:, 0].flatten(1)
        target_masks = target_masks.view(source_masks.shape)
        losses = {
-           "loss_mask": sigmoid_focal_loss(source_masks, target_masks, num_boxes),
+           "loss_mask": sigmoid_cross_entropy_loss(source_masks, target_masks, num_boxes),
            "loss_dice": dice_loss(source_masks, target_masks, num_boxes),
        }
        return losses
@@ -550,6 +681,7 @@ class SetCriterion(nn.Module):
                 losses.update(l_dict)
 
         return losses
+
 
 
 def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
@@ -711,6 +843,28 @@ def build_model(args):
     )
     return model
 
+class PostProcessSegm(nn.Module):
+    def __init__(self, threshold=0.5):
+        super().__init__()
+        self.threshold = threshold
+
+    @torch.no_grad()
+    def forward(self, results, outputs, orig_target_sizes, max_target_sizes):
+        assert len(orig_target_sizes) == len(max_target_sizes)
+        max_h, max_w = max_target_sizes.max(0)[0].tolist()
+        outputs_masks = outputs["pred_masks"].squeeze(2)
+        outputs_masks = F.interpolate(outputs_masks, size=(max_h, max_w), mode="bilinear", align_corners=False)
+        outputs_masks = (outputs_masks.sigmoid() > self.threshold).cpu()
+
+        for i, (cur_mask, t, tt) in enumerate(zip(outputs_masks, max_target_sizes, orig_target_sizes)):
+            img_h, img_w = t[0], t[1]
+            results[i]["masks"] = cur_mask[:, :img_h, :img_w].unsqueeze(1)
+            results[i]["masks"] = F.interpolate(
+                results[i]["masks"].float(), size=tuple(tt.tolist()), mode="nearest"
+            ).byte()
+
+        return results
+
 def build_criterion_and_postprocessors(args):
     device = torch.device(args.device)
     matcher = build_matcher(args)
@@ -730,6 +884,7 @@ def build_criterion_and_postprocessors(args):
             aux_weight_dict.update({k + f'_enc': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
 
+    # losses = ['labels', 'cardinality', 'masks']
     losses = ['labels', 'boxes', 'cardinality', 'masks']
 
     try:
@@ -744,5 +899,5 @@ def build_criterion_and_postprocessors(args):
                              ia_bce_loss=args.ia_bce_loss)
     criterion.to(device)
     postprocessors = {'bbox': PostProcess(num_select=args.num_select)}
-
+    # postprocessors['segm'] = PostProcessSegm()
     return criterion, postprocessors
