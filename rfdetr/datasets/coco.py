@@ -28,9 +28,7 @@ import rfdetr.datasets.transforms as T
 
 
 def compute_multi_scale_scales(resolution, expanded_scales=False):
-    return [448,672]
-
-
+    return [560]
 
 class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms):
@@ -139,11 +137,11 @@ def make_coco_transforms(image_set, resolution, multi_scale=False, expanded_scal
             T.RandomHorizontalFlip(),
             T.RandomSelect(
                 T.RandomResize(scales, max_size=1333),
-                T.Compose([
-                    T.RandomResize([400, 500, 600]),
-                    T.RandomSizeCrop(384, 600),
-                    T.RandomResize(scales, max_size=1333),
-                ])
+                # T.Compose([
+                #     T.RandomResize([400, 500, 600]),
+                #     T.RandomSizeCrop(384, 600),
+                #     T.RandomResize(scales, max_size=1333),
+                # ])
             ),
             normalize,
         ])
@@ -172,7 +170,7 @@ def make_coco_transforms_square_div_64(image_set, resolution, multi_scale=False,
     ])
 
 
-    scales = [resolution]
+    scales = []
     if multi_scale:
         # scales = [448, 512, 576, 640, 704, 768, 832, 896]
         scales = compute_multi_scale_scales(resolution, expanded_scales)
@@ -181,6 +179,7 @@ def make_coco_transforms_square_div_64(image_set, resolution, multi_scale=False,
     if image_set == 'train':
         return T.Compose([
             T.RandomHorizontalFlip(),
+            T.RandomRotation90(),
             T.RandomSelect(
                 T.SquareResize(scales),
                 T.Compose([
