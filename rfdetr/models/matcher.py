@@ -33,7 +33,13 @@ class HungarianMatcher(nn.Module):
     while the others are un-matched (and thus treated as non-objects).
     """
 
-    def __init__(self, cost_class: float = 1, cost_bbox: float = 1, cost_giou: float = 1, focal_alpha: float = 0.25, use_pos_only: bool = False,
+    def __init__(self, 
+    cost_class: float = 1, 
+    cost_bbox: float = 1, 
+    cost_giou: float = 1, 
+    cost_mask:  float = 1,          # NEW
+    focal_alpha: float = 0.25, 
+    use_pos_only: bool = False,
                  use_position_modulated_cost: bool = False):
         """Creates the matcher
         Params:
@@ -45,33 +51,54 @@ class HungarianMatcher(nn.Module):
         self.cost_class = cost_class
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
+        self.cost_mask  = cost_mask     # NEW
+
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
         self.focal_alpha = focal_alpha
 
+
+
     @torch.no_grad()
     def forward(self, outputs, targets, group_detr=1):
-        """ Performs the matching
-        Params:
-            outputs: This is a dict that contains at least these entries:
-                 "pred_logits": Tensor of dim [batch_size, num_queries, num_classes] with the classification logits
-                 "pred_boxes": Tensor of dim [batch_size, num_queries, 4] with the predicted box coordinates
-            targets: This is a list of targets (len(targets) = batch_size), where each target is a dict containing:
-                 "labels": Tensor of dim [num_target_boxes] (where num_target_boxes is the number of ground-truth
-                           objects in the target) containing the class labels
-                 "boxes": Tensor of dim [num_target_boxes, 4] containing the target box coordinates
-            group_detr: Number of groups used for matching.
-        Returns:
-            A list of size batch_size, containing tuples of (index_i, index_j) where:
-                - index_i is the indices of the selected predictions (in order)
-                - index_j is the indices of the corresponding selected targets (in order)
-            For each batch element, it holds:
-                len(index_i) = len(index_j) = min(num_queries, num_target_boxes)
-        """
+        if "pred_masks" not in outputs:
+            raise KeyError("`pred_masks` missing – set `--masks` head or turn cost_mask=0")
+
         bs, num_queries = outputs["pred_logits"].shape[:2]
+        bs, num_queries, Hm, Wm = outputs["pred_masks"].shape
 
         # We flatten to compute the cost matrices in a batch
         out_prob = outputs["pred_logits"].flatten(0, 1).sigmoid()  # [batch_size * num_queries, num_classes]
         out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
+
+
+        out_mask = outputs["pred_masks"].flatten(0, 1).sigmoid()      # [B*Q, Hm, Wm]
+            # gom Ground-truth masks, resize về cùng kích thước với pred
+        tgt_masks = []
+        for tgt in targets:
+            # tgt["masks"]: [Nt, Horig, Worig] (bool/0-1 float)
+            masks = nn.functional.interpolate(
+                tgt["masks"][:, None].float(),  # (Nt,1,H,W)
+                size=(Hm, Wm),
+                mode="bilinear",
+                align_corners=False,
+            )[:, 0]                             # (Nt,Hm,Wm)
+            tgt_masks.append(masks)
+        tgt_masks = torch.cat(tgt_masks, 0)     # [sum_Nt, Hm, Wm]
+
+        # flatten để tính Dice nhanh
+        out_flat = out_mask.flatten(1)          # [B*Q, P]
+        tgt_flat = tgt_masks.flatten(1)         # [sum_Nt, P]
+
+        # soft-Dice = 1 – Dice
+        # Dice = 2*|A∩B| / (|A|+|B|)
+        # Tính ma trận giao cắt bằng nhân ma trận
+        #   out_flat:  (Nq,P)
+        #   tgt_flatᵀ: (P,Nt)
+        inter = 2.0 * (out_flat.float() @ tgt_flat.t())              # [Nq, Nt]
+        union = out_flat.sum(1, keepdim=True) + tgt_flat.sum(1)  # broadcast
+        cost_mask = 1.0 - (inter + 1.0) / (union + 1.0)      # [+eps]  => [Nq,Nt]
+
+
 
         # Also concat the target labels and boxes
         tgt_ids = torch.cat([v["labels"] for v in targets])
@@ -93,8 +120,14 @@ class HungarianMatcher(nn.Module):
         cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
 
         # Final cost matrix
-        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        C = (
+              self.cost_bbox * cost_bbox
+            + self.cost_class*cost_class
+            + self.cost_giou * cost_giou
+            + self.cost_mask * cost_mask            # NEW
+        )
         C = C.view(bs, num_queries, -1).cpu()
+
 
         sizes = [len(v["boxes"]) for v in targets]
         indices = []
@@ -110,6 +143,8 @@ class HungarianMatcher(nn.Module):
                     (np.concatenate([indice1[0], indice2[0] + g_num_queries * g_i]), np.concatenate([indice1[1], indice2[1]]))
                     for indice1, indice2 in zip(indices, indices_g)
                 ]
+
+
         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 
 
@@ -118,4 +153,6 @@ def build_matcher(args):
         cost_class=args.set_cost_class,
         cost_bbox=args.set_cost_bbox,
         cost_giou=args.set_cost_giou,
-        focal_alpha=args.focal_alpha,)
+        cost_mask=args.set_cost_dice,    
+        focal_alpha=args.focal_alpha,
+    )
