@@ -24,7 +24,7 @@ class ModelConfig(BaseModel):
     lite_refpoint_refine: bool = True
     layer_norm: bool = True
     amp: bool = True
-    num_classes: int = 10
+    num_classes: int = 90
     pretrain_weights: Optional[str] = None
     device: Literal["cpu", "cuda", "mps"] = DEVICE
     resolution: int = 560
@@ -54,7 +54,7 @@ class RFDETRLargeConfig(RFDETRBaseConfig):
 
 class TrainConfig(BaseModel):
     lr: float = 1e-4
-    lr_encoder: float = 8e-5
+    lr_encoder: float = 5e-5
     batch_size: int = 4
     grad_accum_steps: int = 4
     epochs: int = 100
