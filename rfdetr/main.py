@@ -129,10 +129,13 @@ class Model:
             new_state_dict = checkpoint["model"]
             current_model_dict = self.model.state_dict()
             new_state_dict = {k.replace("module.", ""): v for k, v in new_state_dict.items()}
-            compatible_state_dict = {
-                k: v for k, v in new_state_dict.items()
-                if k in current_model_dict and v.size() == current_model_dict[k].size()
-            }
+            compatible_state_dict = {}
+            for k, v in new_state_dict.items():
+                if k in current_model_dict and v.size() == current_model_dict[k].size():
+                    compatible_state_dict[k]=v
+                else:
+                    print(k)
+
             current_model_dict.update(compatible_state_dict)
             missing, unexpected = self.model.load_state_dict(current_model_dict, strict=False)
             
@@ -304,6 +307,22 @@ class Model:
                 lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
                 args.start_epoch = checkpoint['epoch'] + 1
 
+
+
+        new_state_dict = torch.load('/content/mask-rf-detr-coco_un_freeze_200725_v3.pt',weights_only=False)
+        current_model_dict = self.model.state_dict()
+        new_state_dict = {k.replace("module.", ""): v for k, v in new_state_dict.items()}
+        compatible_state_dict = {}
+        for k, v in new_state_dict.items():
+            if k in current_model_dict and v.size() == current_model_dict[k].size():
+                compatible_state_dict[k]=v
+            else:
+                print(k)
+
+        current_model_dict.update(compatible_state_dict)
+        missing, unexpected = self.model.load_state_dict(current_model_dict, strict=False)
+
+
         if args.eval:
             test_stats, coco_evaluator = evaluate(
                 model, criterion, postprocessors, data_loader_val, base_ds, device, args)
@@ -327,11 +346,8 @@ class Model:
                 args.cutoff_epoch, args.drop_mode, args.drop_schedule)
             print("Min DP = %.7f, Max DP = %.7f" % (min(schedules['dp']), max(schedules['dp'])))
 
-        # current_model_dict = torch.load('/content/checkpoint_best_regular_wall_detector_11_07_25.pth', weights_only=False)
-        # self.model.model.load_state_dict(model.model.model.state_dict())
         
-        
-        # new_state_dict = torch.load('/content/mask-rf-detr_coco_140725_v5.pt', weights_only=False)
+        # new_state_dict = torch.load('/content/wall_checkpoint_best_total_160725.pth',weights_only=False)['model']
         # current_model_dict = self.model.state_dict()
         # new_state_dict = {k.replace("module.", ""): v for k, v in new_state_dict.items()}
         # compatible_state_dict = {
@@ -340,7 +356,7 @@ class Model:
         # }
         # current_model_dict.update(compatible_state_dict)
         # missing, unexpected = self.model.load_state_dict(current_model_dict, strict=False)
-        
+        # print(missing, unexpected)
 
 
         print("Start training")
@@ -704,6 +720,8 @@ def get_args_parser():
                         help='drop schedule for early dropout / s.d. only')
     parser.add_argument('--cutoff_epoch', type=int, default=0,
                         help='if drop_mode is early / late, this is the epoch where dropout ends / starts')
+    parser.add_argument('--masks', type=bool, default=True,
+                        help='if drop_mode is early / late, this is the epoch where dropout ends / starts')
 
     # Model parameters
     parser.add_argument('--pretrained_encoder', type=str, default=None, 
@@ -759,21 +777,21 @@ def get_args_parser():
     # * Matcher
     parser.add_argument('--set_cost_class', default=2, type=float,
                         help="Class coefficient in the matching cost")
-    parser.add_argument('--set_cost_bbox', default=5, type=float,
+    parser.add_argument('--set_cost_bbox', default=4, type=float,
                         help="L1 box coefficient in the matching cost")
     parser.add_argument('--set_cost_giou', default=2, type=float,
                         help="giou box coefficient in the matching cost")
     parser.add_argument('--set_cost_mask', default=2, type=float,
                         help="giou box coefficient in the matching cost")
-    parser.add_argument('--set_cost_dice', default=2, type=float,
+    parser.add_argument('--set_cost_dice', default=4, type=float,
                         help="giou box coefficient in the matching cost")
 
     # * Loss coefficients
     parser.add_argument('--cls_loss_coef', default=2, type=float)
-    parser.add_argument('--bbox_loss_coef', default=5, type=float)
+    parser.add_argument('--bbox_loss_coef', default=4, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
     parser.add_argument('--mask_loss_coef', default=2, type=float)
-    parser.add_argument('--dice_loss_coef', default=2, type=float)
+    parser.add_argument('--dice_loss_coef', default=4, type=float)
     parser.add_argument('--focal_alpha', default=0.25, type=float)
     
     # Loss
@@ -868,6 +886,7 @@ def get_args_parser():
 def populate_args(
     # Basic training parameters
     num_classes=2,
+    masks=True,
     grad_accum_steps=1,
     amp=False,
     lr=1e-4,
@@ -926,17 +945,17 @@ def populate_args(
     
     # Matcher parameters
     set_cost_class=2,
-    set_cost_bbox=5,
+    set_cost_bbox=4,
     set_cost_giou=2,
     set_cost_mask=2,
-    set_cost_dice=2,
+    set_cost_dice=4,
     
     # Loss coefficients
     cls_loss_coef=2,
-    bbox_loss_coef=5,
+    bbox_loss_coef=4,
     giou_loss_coef=2,
     mask_loss_coef=2,
-    dice_loss_coef=2,
+    dice_loss_coef=4,
     focal_alpha=0.25,
     aux_loss=True,
     sum_group_losses=False,
@@ -1068,6 +1087,7 @@ def populate_args(
         resume=resume,
         start_epoch=start_epoch,
         eval=eval,
+        masks=masks,
         use_ema=use_ema,
         ema_decay=ema_decay,
         ema_tau=ema_tau,
