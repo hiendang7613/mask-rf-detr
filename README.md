@@ -1,4 +1,4 @@
-# RF-DETR: SOTA Real-Time Object Detection Model
+# Mask-rf-detr: Transformer-based Instance Segmentation with RFDETR
 
 [![version](https://badge.fury.io/py/rfdetr.svg)](https://badge.fury.io/py/rfdetr)
 [![downloads](https://img.shields.io/pypi/dm/rfdetr)](https://pypistats.org/packages/rfdetr)
