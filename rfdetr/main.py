@@ -309,18 +309,22 @@ class Model:
 
 
 
-        new_state_dict = torch.load('/content/mask-rf-detr-coco_un_freeze_200725_v3.pt',weights_only=False)
-        current_model_dict = self.model.state_dict()
-        new_state_dict = {k.replace("module.", ""): v for k, v in new_state_dict.items()}
-        compatible_state_dict = {}
-        for k, v in new_state_dict.items():
-            if k in current_model_dict and v.size() == current_model_dict[k].size():
-                compatible_state_dict[k]=v
-            else:
-                print(k)
+        # Load mask weights if provided
+        mask_weights_path = getattr(args, 'mask_weights', None)
+        if mask_weights_path and os.path.exists(mask_weights_path):
+            logger.info(f"Loading mask weights from: {mask_weights_path}")
+            new_state_dict = torch.load(mask_weights_path, weights_only=False)
+            current_model_dict = self.model.state_dict()
+            new_state_dict = {k.replace("module.", ""): v for k, v in new_state_dict.items()}
+            compatible_state_dict = {}
+            for k, v in new_state_dict.items():
+                if k in current_model_dict and v.size() == current_model_dict[k].size():
+                    compatible_state_dict[k]=v
 
-        current_model_dict.update(compatible_state_dict)
-        missing, unexpected = self.model.load_state_dict(current_model_dict, strict=False)
+            current_model_dict.update(compatible_state_dict)
+            missing, unexpected = self.model.load_state_dict(current_model_dict, strict=False)
+        elif mask_weights_path:
+            logger.warning(f"Mask weights not found at: {mask_weights_path}, skipping")
 
 
         if args.eval:
@@ -345,19 +349,6 @@ class Model:
                 args.drop_path, args.epochs, num_training_steps_per_epoch,
                 args.cutoff_epoch, args.drop_mode, args.drop_schedule)
             print("Min DP = %.7f, Max DP = %.7f" % (min(schedules['dp']), max(schedules['dp'])))
-
-        
-        # new_state_dict = torch.load('/content/wall_checkpoint_best_total_160725.pth',weights_only=False)['model']
-        # current_model_dict = self.model.state_dict()
-        # new_state_dict = {k.replace("module.", ""): v for k, v in new_state_dict.items()}
-        # compatible_state_dict = {
-        #     k: v for k, v in new_state_dict.items()
-        #     if k in current_model_dict and v.size() == current_model_dict[k].size()
-        # }
-        # current_model_dict.update(compatible_state_dict)
-        # missing, unexpected = self.model.load_state_dict(current_model_dict, strict=False)
-        # print(missing, unexpected)
-
 
         print("Start training")
         start_time = time.time()
@@ -1007,6 +998,9 @@ def populate_args(
     early_stopping_min_delta=0.001,
     early_stopping_use_ema=False,
     gradient_checkpointing=False,
+    # Mask-specific weights
+    spatial_backbone_weights=None,
+    mask_weights=None,
     # Additional
     subcommand=None,
     **extra_kwargs  # To handle any unexpected arguments
@@ -1111,6 +1105,8 @@ def populate_args(
         early_stopping_min_delta=early_stopping_min_delta,
         early_stopping_use_ema=early_stopping_use_ema,
         gradient_checkpointing=gradient_checkpointing,
+        spatial_backbone_weights=spatial_backbone_weights,
+        mask_weights=mask_weights,
         **extra_kwargs
     )
     return args

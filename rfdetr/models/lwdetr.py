@@ -21,6 +21,7 @@ LW-DETR model and criterion classes
 """
 import copy
 import math
+import os
 from typing import Callable
 import torch
 import torch.nn.functional as F
@@ -125,7 +126,8 @@ class LWDETR(nn.Module):
                  group_detr=1,
                  two_stage=False,
                  lite_refpoint_refine=False,
-                 bbox_reparam=False):
+                 bbox_reparam=False,
+                 spatial_backbone_weights=None):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -136,6 +138,7 @@ class LWDETR(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
             group_detr: Number of groups to speed detr training. Default is 1.
             lite_refpoint_refine: TODO
+            spatial_backbone_weights: path to SAM2 Hiera backbone weights
         """
         super().__init__()
         self.num_queries = num_queries
@@ -187,12 +190,18 @@ class LWDETR(nn.Module):
         config.oversample_ratio=4
         self.pixel_decoder = Mask2FormerPixelDecoder(config, feature_channels = [256,hidden_dim,256,hidden_dim])
         self.pixel_decoder.num_feature_levels = 4
-        # self.spatial_proj = nn.ModuleList([
-        #     nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
-        #     nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
-        #     nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1)),
-        # ])
-        self.spatial_backbone = torch.load('/content/Hiera_sam2.1_hiera_base_plus.pt', weights_only=False)
+        
+        # Load spatial backbone weights from configurable path
+        from rfdetr.config import DEFAULT_SPATIAL_BACKBONE_WEIGHTS
+        weights_path = spatial_backbone_weights or DEFAULT_SPATIAL_BACKBONE_WEIGHTS
+        if not os.path.exists(weights_path):
+            raise FileNotFoundError(
+                f"Spatial backbone weights not found at: {weights_path}\n"
+                f"Please download SAM2 Hiera weights and set the path via:\n"
+                f"  - Environment variable: MASK_RFDETR_SPATIAL_BACKBONE\n"
+                f"  - Or config parameter: spatial_backbone_weights"
+            )
+        self.spatial_backbone = torch.load(weights_path, weights_only=False)
         self.avgPool2d = nn.AvgPool2d(2, stride=2)
         _init_weights(self.pixel_decoder, self.pixel_decoder)
         self.spatial_proj = nn.Conv2d(256, hidden_dim, kernel_size=(1, 1), stride=(1, 1))
@@ -236,9 +245,6 @@ class LWDETR(nn.Module):
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
-
-        # torch.save(samples, 'samples.pt')
-        # torch.save(targets, 'targets.pt')
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, poss = self.backbone(samples)
@@ -249,20 +255,10 @@ class LWDETR(nn.Module):
         features_2 = self.spatial_backbone(pixel_values_2)['backbone_fpn']
 
         srcs = []
-        # srcs2 = []
         masks = []
         for l, feat in enumerate(features):
             src, mask = feat.decompose()
-            # src2 = self.avgPool2d([features_2[0],features_2[2]][l])
-            # src2 = self.avgPool2d(features_2[l])
-            # src2 = nn.functional.interpolate(features_2[l], size=src.shape[-2:], mode="bilinear", align_corners=False)
-
-            # src2 = self.spatial_proj[l](src2)
-            # print('src=', src.shape)
-            # print('src2=', src2.shape)
-            # print('features_2[l]=', features_2[l].shape)
             srcs.append(src)
-            # srcs2.append(src2)
             masks.append(mask)
             assert mask is not None
         
@@ -283,10 +279,6 @@ class LWDETR(nn.Module):
           self.spatial_proj(self.avgPool2d(multi_scale_features[3])), 
           self.spatial_proj(self.avgPool2d(multi_scale_features[1]))
         ]
-        # for x in multi_scale_features:
-        #   print('x=',x.shape)
-        # for x in srcs2:
-        #   print('x=',x.shape)
         if self.training:
             refpoint_embed_weight = self.refpoint_embed.weight
             query_feat_weight = self.query_feat.weight
@@ -300,8 +292,6 @@ class LWDETR(nn.Module):
             pixel_embeddings=decoder_output.mask_features,
             srcs2=srcs2,
             )
-        # print('hs=',hs.shape)
-        # print('masks_queries_logits=',masks_queries_logits[0].shape)
 
         if self.bbox_reparam:
             outputs_coord_delta = self.bbox_embed(hs)
@@ -830,6 +820,7 @@ def build_model(args):
     args.num_feature_levels = len(args.projector_scale)
     transformer = build_transformer(args)
 
+    spatial_backbone_weights = getattr(args, 'spatial_backbone_weights', None)
     model = LWDETR(
         backbone,
         transformer,
@@ -840,6 +831,7 @@ def build_model(args):
         two_stage=args.two_stage,
         lite_refpoint_refine=args.lite_refpoint_refine,
         bbox_reparam=args.bbox_reparam,
+        spatial_backbone_weights=spatial_backbone_weights,
     )
     return model
 

@@ -339,7 +339,6 @@ class TransformerDecoder(nn.Module):
         from rfdetr.models.lwdetr import _init_weights
         _init_weights(self.mask_predictor, self.mask_predictor)
 
-        # self.mask_proj = nn.Linear(d_model, 2d_model56)
     def export(self):
         self._export = True
 
@@ -423,15 +422,12 @@ class TransformerDecoder(nn.Module):
                            level_start_index=level_start_index)
             
             intermediate_hidden_states = self.layernorm(output.transpose(0, 1))
-            # print('intermediate_hidden_states=', intermediate_hidden_states.shape)
             predicted_mask, attention_mask = self.mask_predictor(
                 intermediate_hidden_states,
                 pixel_embeddings,
                 feature_size_list[(layer_id + 1) % 3],
             )
             intermediate_mask_predictions += (predicted_mask,)
-            # print('predicted_mask=', predicted_mask.shape)
-
 
             if not self.lite_refpoint_refine:
                 # box iterative update

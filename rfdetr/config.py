@@ -5,10 +5,21 @@
 # ------------------------------------------------------------------------
 
 
+import os
 from pydantic import BaseModel
 from typing import List, Optional, Literal, Type
 import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+
+# Default weight paths - can be overridden via environment variables
+DEFAULT_SPATIAL_BACKBONE_WEIGHTS = os.environ.get(
+    "MASK_RFDETR_SPATIAL_BACKBONE", 
+    "weights/Hiera_sam2.1_hiera_base_plus.pt"
+)
+DEFAULT_MASK_WEIGHTS = os.environ.get(
+    "MASK_RFDETR_MASK_WEIGHTS",
+    "weights/mask-rf-detr-coco.pt"
+)
 
 class ModelConfig(BaseModel):
     encoder: Literal["dinov2_windowed_small", "dinov2_windowed_base"]
@@ -30,6 +41,9 @@ class ModelConfig(BaseModel):
     resolution: int = 560
     group_detr: int = 9
     gradient_checkpointing: bool = False
+    # Mask-specific weights
+    spatial_backbone_weights: Optional[str] = DEFAULT_SPATIAL_BACKBONE_WEIGHTS
+    mask_weights: Optional[str] = DEFAULT_MASK_WEIGHTS
 
 class RFDETRBaseConfig(ModelConfig):
     encoder: Literal["dinov2_windowed_small", "dinov2_windowed_base"] = "dinov2_windowed_small"
