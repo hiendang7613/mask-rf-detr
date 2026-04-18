@@ -6,20 +6,27 @@
 
 
 import os
-from pydantic import BaseModel
-from typing import List, Optional, Literal, Type
+from typing import List, Literal, Optional
+
 import torch
-DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+from pydantic import BaseModel
+
+DEVICE = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
 
 # Default weight paths - can be overridden via environment variables
 DEFAULT_SPATIAL_BACKBONE_WEIGHTS = os.environ.get(
-    "MASK_RFDETR_SPATIAL_BACKBONE", 
-    "weights/Hiera_sam2.1_hiera_base_plus.pt"
+    "MASK_RFDETR_SPATIAL_BACKBONE", "weights/Hiera_sam2.1_hiera_base_plus.pt"
 )
 DEFAULT_MASK_WEIGHTS = os.environ.get(
-    "MASK_RFDETR_MASK_WEIGHTS",
-    "weights/mask-rf-detr-coco.pt"
+    "MASK_RFDETR_MASK_WEIGHTS", "weights/mask-rf-detr-coco.pt"
 )
+
 
 class ModelConfig(BaseModel):
     encoder: Literal["dinov2_windowed_small", "dinov2_windowed_base"]
@@ -45,8 +52,11 @@ class ModelConfig(BaseModel):
     spatial_backbone_weights: Optional[str] = DEFAULT_SPATIAL_BACKBONE_WEIGHTS
     mask_weights: Optional[str] = DEFAULT_MASK_WEIGHTS
 
+
 class RFDETRBaseConfig(ModelConfig):
-    encoder: Literal["dinov2_windowed_small", "dinov2_windowed_base"] = "dinov2_windowed_small"
+    encoder: Literal["dinov2_windowed_small", "dinov2_windowed_base"] = (
+        "dinov2_windowed_small"
+    )
     hidden_dim: int = 256
     sa_nheads: int = 8
     ca_nheads: int = 16
@@ -57,14 +67,18 @@ class RFDETRBaseConfig(ModelConfig):
     out_feature_indexes: List[int] = [2, 5, 8, 11]
     pretrain_weights: Optional[str] = "rf-detr-base.pth"
 
+
 class RFDETRLargeConfig(RFDETRBaseConfig):
-    encoder: Literal["dinov2_windowed_small", "dinov2_windowed_base"] = "dinov2_windowed_base"
+    encoder: Literal["dinov2_windowed_small", "dinov2_windowed_base"] = (
+        "dinov2_windowed_base"
+    )
     hidden_dim: int = 384
     sa_nheads: int = 12
     ca_nheads: int = 24
     dec_n_points: int = 4
     projector_scale: List[Literal["P3", "P4", "P5"]] = ["P3", "P5"]
     pretrain_weights: Optional[str] = "rf-detr-large.pth"
+
 
 class TrainConfig(BaseModel):
     lr: float = 1e-4

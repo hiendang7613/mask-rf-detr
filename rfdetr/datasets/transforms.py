@@ -44,11 +44,14 @@ __all__ = [
 # Helper utilities
 # -----------------------------------------------------------------------------
 
+
 def _clone_target(tgt: dict | None) -> dict | None:
     """Deep‑ish clone: clone tất cả Tensor, giữ nguyên kiểu dữ liệu khác."""
     if tgt is None:
         return None
-    return {k: v.clone() if torch.is_tensor(v) else copy.deepcopy(v) for k, v in tgt.items()}
+    return {
+        k: v.clone() if torch.is_tensor(v) else copy.deepcopy(v) for k, v in tgt.items()
+    }
 
 
 def interpolate(
@@ -70,6 +73,7 @@ def interpolate(
 # Box conversions
 # -----------------------------------------------------------------------------
 
+
 def box_cxcywh_to_xyxy(boxes: Tensor) -> Tensor:
     cx, cy, w, h = boxes.unbind(-1)
     return torch.stack((cx - 0.5 * w, cy - 0.5 * h, cx + 0.5 * w, cy + 0.5 * h), dim=-1)
@@ -83,6 +87,7 @@ def box_xyxy_to_cxcywh(boxes: Tensor) -> Tensor:
 # -----------------------------------------------------------------------------
 # Core geometric ops (functional API)
 # -----------------------------------------------------------------------------
+
 
 def crop(image: Image.Image, target: dict, region: Tuple[int, int, int, int]):
     """Crop PIL image & target; ``region = (top, left, height, width)``."""
@@ -216,6 +221,7 @@ def pad(image: Image.Image | Tensor, target: dict | None, padding: Tuple[int, in
 # Transform class objects
 # -----------------------------------------------------------------------------
 
+
 class RandomRotation90:
     """Rotate 0/90/180/270° ngẫu nhiên."""
 
@@ -288,7 +294,9 @@ class RandomHorizontalFlip:
 
 
 class RandomResize:
-    def __init__(self, sizes: Iterable[int | Tuple[int, int]], max_size: int | None = None):
+    def __init__(
+        self, sizes: Iterable[int | Tuple[int, int]], max_size: int | None = None
+    ):
         self.sizes = list(sizes)
         self.max_size = max_size
 
@@ -373,9 +381,14 @@ class SquareResize:
             return img, None
 
         out = _clone_target(tgt)
-        scale = torch.tensor(
-            [s / orig_w, s / orig_h, s / orig_w, s / orig_h], device=out["boxes"].device
-        ) if "boxes" in out else None
+        scale = (
+            torch.tensor(
+                [s / orig_w, s / orig_h, s / orig_w, s / orig_h],
+                device=out["boxes"].device,
+            )
+            if "boxes" in out
+            else None
+        )
 
         if scale is not None and out["boxes"].numel():
             out["boxes"] = out["boxes"] * scale

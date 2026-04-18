@@ -7,15 +7,15 @@
 # Copyright (c) 2024 Baidu. All Rights Reserved.
 # ------------------------------------------------------------------------
 
-from typing import Dict, List
+from typing import Callable
 
 import torch
 from torch import nn
 
-from rfdetr.util.misc import NestedTensor
+from rfdetr.models.backbone.backbone import Backbone
 from rfdetr.models.position_encoding import build_position_encoding
-from rfdetr.models.backbone.backbone import *
-from typing import Callable
+from rfdetr.util.misc import NestedTensor
+
 
 class Joiner(nn.Sequential):
     def __init__(self, backbone, position_embedding):

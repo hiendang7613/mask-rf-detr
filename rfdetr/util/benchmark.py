@@ -10,30 +10,26 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 # ------------------------------------------------------------------------
 
-from collections import OrderedDict, Counter, defaultdict
 import json
 import os
-import pdb
-from posixpath import join
 import sys
-
+from collections import Counter, OrderedDict, defaultdict
 
 sys.path.append(os.path.dirname(sys.path[0]))
 
-import numpy as np
-from numpy import prod
-from itertools import zip_longest
-import tqdm
 import logging
+import time
 import typing
+from functools import partial
+from itertools import zip_longest
+from numbers import Number
+from typing import Any, Callable, List, Union
+
+import numpy as np
 import torch
 import torch.nn as nn
-from functools import partial
-import time
-
-
-from typing import Any, Callable, List, Optional, Union
-from numbers import Number
+import tqdm
+from numpy import prod
 
 Handle = Callable[[List[Any], List[Any]], Union[typing.Counter[str], Number]]
 
@@ -511,9 +507,9 @@ def flop_count(
     ):
         model = model.module  # pyre-ignore
 
-    assert set(whitelist_set).issubset(
-        flop_count_ops
-    ), "whitelist needs to be a subset of _SUPPORTED_OPS and customized_ops."
+    assert set(whitelist_set).issubset(flop_count_ops), (
+        "whitelist needs to be a subset of _SUPPORTED_OPS and customized_ops."
+    )
     assert isinstance(inputs, tuple), "Inputs need to be in a tuple."
 
     # Compatibility with torch.jit.
@@ -559,7 +555,7 @@ def flop_count(
 
 def warmup(model, inputs, N=10):
     for i in range(N):
-        out = model(inputs)
+        model(inputs)
     torch.cuda.synchronize()
 
 
@@ -567,7 +563,7 @@ def measure_time(model, inputs, N=10):
     warmup(model, inputs)
     s = time.time()
     for i in range(N):
-        out = model(inputs)
+        model(inputs)
     torch.cuda.synchronize()
     t = (time.time() - s) / N
     return t

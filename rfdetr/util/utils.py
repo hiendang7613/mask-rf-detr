@@ -1,12 +1,14 @@
-from copy import deepcopy
-import torch
 import json
-from collections import OrderedDict
 import math
+from collections import OrderedDict
+from copy import deepcopy
+
+import torch
 
 
 class ModelEma(torch.nn.Module):
     """EMA Model"""
+
     def __init__(self, model, decay=0.9997, tau=0, device=None):
         super(ModelEma, self).__init__()
         # make a copy of the model for accumulating moving average of weights
@@ -30,33 +32,34 @@ class ModelEma(torch.nn.Module):
     def _update(self, model, update_fn):
         with torch.no_grad():
             for ema_v, model_v in zip(
-                self.module.state_dict().values(), model.state_dict().values()):
+                self.module.state_dict().values(), model.state_dict().values()
+            ):
                 if self.device is not None:
                     model_v = model_v.to(device=self.device)
                 ema_v.copy_(update_fn(ema_v, model_v))
 
     def update(self, model):
         decay = self._get_decay()
-        self._update(model, update_fn=lambda e, m: decay * e + (1. - decay) * m)
+        self._update(model, update_fn=lambda e, m: decay * e + (1.0 - decay) * m)
         self.updates += 1
 
     def set(self, model):
         self._update(model, update_fn=lambda e, m: m)
 
 
-class BestMetricSingle():
-    def __init__(self, init_res=0.0, better='large') -> None:
+class BestMetricSingle:
+    def __init__(self, init_res=0.0, better="large") -> None:
         self.init_res = init_res
         self.best_res = init_res
         self.best_ep = -1
 
         self.better = better
-        assert better in ['large', 'small']
+        assert better in ["large", "small"]
 
     def isbetter(self, new_res, old_res):
-        if self.better == 'large':
+        if self.better == "large":
             return new_res > old_res
-        if self.better == 'small':
+        if self.better == "small":
             return new_res < old_res
 
     def update(self, new_res, ep):
@@ -74,13 +77,13 @@ class BestMetricSingle():
 
     def summary(self) -> dict:
         return {
-            'best_res': self.best_res,
-            'best_ep': self.best_ep,
+            "best_res": self.best_res,
+            "best_ep": self.best_ep,
         }
 
 
-class BestMetricHolder():
-    def __init__(self, init_res=0.0, better='large', use_ema=False) -> None:
+class BestMetricHolder:
+    def __init__(self, init_res=0.0, better="large", use_ema=False) -> None:
         self.best_all = BestMetricSingle(init_res, better)
         self.use_ema = use_ema
         if use_ema:
@@ -106,9 +109,9 @@ class BestMetricHolder():
             return self.best_all.summary()
 
         res = {}
-        res.update({f'all_{k}':v for k,v in self.best_all.summary().items()})
-        res.update({f'regular_{k}':v for k,v in self.best_regular.summary().items()})
-        res.update({f'ema_{k}':v for k,v in self.best_ema.summary().items()})
+        res.update({f"all_{k}": v for k, v in self.best_all.summary().items()})
+        res.update({f"regular_{k}": v for k, v in self.best_regular.summary().items()})
+        res.update({f"ema_{k}": v for k, v in self.best_ema.summary().items()})
         return res
 
     def __repr__(self) -> str:
@@ -121,7 +124,7 @@ class BestMetricHolder():
 def clean_state_dict(state_dict):
     new_state_dict = OrderedDict()
     for k, v in state_dict.items():
-        if k[:7] == 'module.':
+        if k[:7] == "module.":
             k = k[7:]  # remove `module.`
         new_state_dict[k] = v
     return new_state_dict

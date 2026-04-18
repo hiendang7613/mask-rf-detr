@@ -8,9 +8,9 @@
 import json
 import os
 from collections import defaultdict
-from logging import getLogger
-from typing import Union, List
 from copy import deepcopy
+from logging import getLogger
+from typing import List, Union
 
 import numpy as np
 import supervision as sv
@@ -19,16 +19,22 @@ import torchvision.transforms.functional as F
 from PIL import Image
 
 try:
-    torch.set_float32_matmul_precision('high')
-except:
+    torch.set_float32_matmul_precision("high")
+except Exception:
     pass
 
-from rfdetr.config import RFDETRBaseConfig, RFDETRLargeConfig, TrainConfig, ModelConfig
+from rfdetr.config import ModelConfig, RFDETRBaseConfig, RFDETRLargeConfig, TrainConfig
 from rfdetr.main import Model, download_pretrain_weights
-from rfdetr.util.metrics import MetricsPlotSink, MetricsTensorBoardSink, MetricsWandBSink
 from rfdetr.util.coco_classes import COCO_CLASSES
+from rfdetr.util.metrics import (
+    MetricsPlotSink,
+    MetricsTensorBoardSink,
+    MetricsWandBSink,
+)
 
 logger = getLogger(__name__)
+
+
 class RFDETR:
     means = [0.485, 0.456, 0.406]
     stds = [0.229, 0.224, 0.225]
@@ -56,7 +62,7 @@ class RFDETR:
     def train(self, **kwargs):
         config = self.get_train_config(**kwargs)
         self.train_from_config(config, **kwargs)
-    
+
     def optimize_for_inference(self, compile=True, batch_size=1, dtype=torch.float32):
         self.remove_optimized_model()
 
@@ -74,22 +80,25 @@ class RFDETR:
             self.model.inference_model = torch.jit.trace(
                 self.model.inference_model,
                 torch.randn(
-                    batch_size, 3, self.model.resolution, self.model.resolution, 
+                    batch_size,
+                    3,
+                    self.model.resolution,
+                    self.model.resolution,
                     device=self.model.device,
-                    dtype=dtype
-                )
+                    dtype=dtype,
+                ),
             )
             self._optimized_has_been_compiled = True
             self._optimized_batch_size = batch_size
-    
+
     def remove_optimized_model(self):
         self.model.inference_model = None
         self._is_optimized_for_inference = False
         self._optimized_has_been_compiled = False
         self._optimized_batch_size = None
         self._optimized_resolution = None
-        self._optimized_half = False
-    
+        self._optimized_dtype = None
+
     def export(self, **kwargs):
         self.model.export(**kwargs)
 
@@ -99,7 +108,9 @@ class RFDETR:
         ) as f:
             anns = json.load(f)
             num_classes = len(anns["categories"])
-            class_names = [c["name"] for c in anns["categories"] if c["supercategory"] != "none"]
+            class_names = [
+                c["name"] for c in anns["categories"] if c["supercategory"] != "none"
+            ]
             self.model.class_names = class_names
 
         if self.model_config.num_classes != num_classes:
@@ -108,14 +119,13 @@ class RFDETR:
                 f"reinitializing your detection head with {num_classes} classes."
             )
             self.model.reinitialize_detection_head(num_classes)
-        
-        
+
         train_config = config.dict()
         model_config = self.model_config.dict()
         model_config.pop("num_classes")
         if "class_names" in model_config:
             model_config.pop("class_names")
-        
+
         if "class_names" in train_config and train_config["class_names"] is None:
             train_config["class_names"] = class_names
 
@@ -124,15 +134,22 @@ class RFDETR:
                 model_config.pop(k)
             if k in kwargs:
                 kwargs.pop(k)
-        
-        all_kwargs = {**model_config, **train_config, **kwargs, "num_classes": num_classes}
+
+        all_kwargs = {
+            **model_config,
+            **train_config,
+            **kwargs,
+            "num_classes": num_classes,
+        }
 
         metrics_plot_sink = MetricsPlotSink(output_dir=config.output_dir)
         self.callbacks["on_fit_epoch_end"].append(metrics_plot_sink.update)
         self.callbacks["on_train_end"].append(metrics_plot_sink.save)
 
         if config.tensorboard:
-            metrics_tensor_board_sink = MetricsTensorBoardSink(output_dir=config.output_dir)
+            metrics_tensor_board_sink = MetricsTensorBoardSink(
+                output_dir=config.output_dir
+            )
             self.callbacks["on_fit_epoch_end"].append(metrics_tensor_board_sink.update)
             self.callbacks["on_train_end"].append(metrics_tensor_board_sink.close)
 
@@ -141,18 +158,19 @@ class RFDETR:
                 output_dir=config.output_dir,
                 project=config.project,
                 run=config.run,
-                config=config.model_dump()
+                config=config.model_dump(),
             )
             self.callbacks["on_fit_epoch_end"].append(metrics_wandb_sink.update)
             self.callbacks["on_train_end"].append(metrics_wandb_sink.close)
 
         if config.early_stopping:
             from rfdetr.util.early_stopping import EarlyStoppingCallback
+
             early_stopping_callback = EarlyStoppingCallback(
                 model=self.model,
                 patience=config.early_stopping_patience,
                 min_delta=config.early_stopping_min_delta,
-                use_ema=config.early_stopping_use_ema
+                use_ema=config.early_stopping_use_ema,
             )
             self.callbacks["on_fit_epoch_end"].append(early_stopping_callback.update)
 
@@ -166,20 +184,26 @@ class RFDETR:
 
     def get_model(self, config: ModelConfig):
         return Model(**config.dict())
-    
+
     # Get class_names from the model
     @property
     def class_names(self):
-        if hasattr(self.model, 'class_names') and self.model.class_names:
-            return {i+1: name for i, name in enumerate(self.model.class_names)}
-            
+        if hasattr(self.model, "class_names") and self.model.class_names:
+            return {i + 1: name for i, name in enumerate(self.model.class_names)}
+
         return COCO_CLASSES
 
     def predict(
-            self,
-            images: Union[str, Image.Image, np.ndarray, torch.Tensor, List[Union[str, np.ndarray, Image.Image, torch.Tensor]]],
-            threshold: float = 0.5,
-            **kwargs,
+        self,
+        images: Union[
+            str,
+            Image.Image,
+            np.ndarray,
+            torch.Tensor,
+            List[Union[str, np.ndarray, Image.Image, torch.Tensor]],
+        ],
+        threshold: float = 0.5,
+        **kwargs,
     ) -> Union[sv.Detections, List[sv.Detections]]:
         """Performs object detection on the input images and returns bounding box
         predictions.
@@ -203,7 +227,10 @@ class RFDETR:
                 objects, each containing bounding box coordinates, confidence scores,
                 and class IDs.
         """
-        if not self._is_optimized_for_inference and not self._has_warned_about_not_being_optimized_for_inference:
+        if (
+            not self._is_optimized_for_inference
+            and not self._has_warned_about_not_being_optimized_for_inference
+        ):
             logger.warning(
                 "Model is not optimized for inference. "
                 "Latency may be higher than expected. "
@@ -220,13 +247,12 @@ class RFDETR:
         processed_images = []
 
         for img in images:
-
             if isinstance(img, str):
                 img = Image.open(img)
 
             if not isinstance(img, torch.Tensor):
                 img = F.to_tensor(img)
-            
+
             if (img > 1).any():
                 raise ValueError(
                     "Image has pixel values above 1. Please ensure the image is "
@@ -238,13 +264,15 @@ class RFDETR:
                     f"{img.shape[0]} channels."
                 )
             img_tensor = img
-            
+
             h, w = img_tensor.shape[1:]
             orig_sizes.append((h, w))
 
             img_tensor = img_tensor.to(self.model.device)
             img_tensor = F.normalize(img_tensor, self.means, self.stds)
-            img_tensor = F.resize(img_tensor, (self.model.resolution, self.model.resolution))
+            img_tensor = F.resize(
+                img_tensor, (self.model.resolution, self.model.resolution)
+            )
 
             processed_images.append(img_tensor)
 
@@ -253,47 +281,85 @@ class RFDETR:
         if self._is_optimized_for_inference:
             if self._optimized_resolution != batch_tensor.shape[2]:
                 # this could happen if someone manually changes self.model.resolution after optimizing the model
-                raise ValueError(f"Resolution mismatch. "
-                                 f"Model was optimized for resolution {self._optimized_resolution}, "
-                                 f"but got {batch_tensor.shape[2]}. "
-                                 "You can explicitly remove the optimized model by calling model.remove_optimized_model().")
+                raise ValueError(
+                    f"Resolution mismatch. "
+                    f"Model was optimized for resolution {self._optimized_resolution}, "
+                    f"but got {batch_tensor.shape[2]}. "
+                    "You can explicitly remove the optimized model by calling model.remove_optimized_model()."
+                )
             if self._optimized_has_been_compiled:
                 if self._optimized_batch_size != batch_tensor.shape[0]:
-                    raise ValueError(f"Batch size mismatch. "
-                                     f"Optimized model was compiled for batch size {self._optimized_batch_size}, "
-                                     f"but got {batch_tensor.shape[0]}. "
-                                     "You can explicitly remove the optimized model by calling model.remove_optimized_model(). "
-                                     "Alternatively, you can recompile the optimized model for a different batch size "
-                                     "by calling model.optimize_for_inference(batch_size=<new_batch_size>).")
+                    raise ValueError(
+                        f"Batch size mismatch. "
+                        f"Optimized model was compiled for batch size {self._optimized_batch_size}, "
+                        f"but got {batch_tensor.shape[0]}. "
+                        "You can explicitly remove the optimized model by calling model.remove_optimized_model(). "
+                        "Alternatively, you can recompile the optimized model for a different batch size "
+                        "by calling model.optimize_for_inference(batch_size=<new_batch_size>)."
+                    )
 
         with torch.inference_mode():
             if self._is_optimized_for_inference:
-                predictions = self.model.inference_model(batch_tensor.to(dtype=self._optimized_dtype))
+                predictions = self.model.inference_model(
+                    batch_tensor.to(dtype=self._optimized_dtype)
+                )
             else:
                 predictions = self.model.model(batch_tensor)
             if isinstance(predictions, tuple):
                 predictions = {
                     "pred_logits": predictions[1],
-                    "pred_boxes": predictions[0]
+                    "pred_boxes": predictions[0],
+                    **({"pred_masks": predictions[2]} if len(predictions) > 2 else {}),
                 }
             target_sizes = torch.tensor(orig_sizes, device=self.model.device)
-            results = self.model.postprocessors["bbox"](predictions, target_sizes=target_sizes)
+            results = self.model.postprocessors["bbox"](
+                predictions, target_sizes=target_sizes
+            )
+
+            # Gather instance masks at the same top-k indices PostProcess used.
+            pred_masks = (
+                predictions.get("pred_masks") if isinstance(predictions, dict) else None
+            )
+            if pred_masks is not None:
+                out_logits = predictions["pred_logits"]
+                num_select = self.model.postprocessors["bbox"].num_select
+                prob = out_logits.sigmoid()
+                _, topk_indexes = torch.topk(
+                    prob.view(out_logits.shape[0], -1), num_select, dim=1
+                )
+                topk_query_idx = topk_indexes // out_logits.shape[2]
+                for i, (mask_logits, tgt_size) in enumerate(
+                    zip(pred_masks, target_sizes)
+                ):
+                    selected = mask_logits[topk_query_idx[i]].float()
+                    h_orig, w_orig = int(tgt_size[0]), int(tgt_size[1])
+                    resized = torch.nn.functional.interpolate(
+                        selected.unsqueeze(1),
+                        size=(h_orig, w_orig),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).squeeze(1)
+                    results[i]["masks"] = resized.sigmoid() > 0.5
 
         detections_list = []
         for result in results:
             scores = result["scores"]
             labels = result["labels"]
             boxes = result["boxes"]
+            masks = result.get("masks")
 
             keep = scores > threshold
             scores = scores[keep]
             labels = labels[keep]
             boxes = boxes[keep]
+            if masks is not None:
+                masks = masks[keep]
 
             detections = sv.Detections(
                 xyxy=boxes.float().cpu().numpy(),
                 confidence=scores.float().cpu().numpy(),
                 class_id=labels.cpu().numpy(),
+                mask=masks.cpu().numpy() if masks is not None else None,
             )
             detections_list.append(detections)
 
@@ -306,6 +372,7 @@ class RFDETRBase(RFDETR):
 
     def get_train_config(self, **kwargs):
         return TrainConfig(**kwargs)
+
 
 class RFDETRLarge(RFDETR):
     def get_model_config(self, **kwargs):
