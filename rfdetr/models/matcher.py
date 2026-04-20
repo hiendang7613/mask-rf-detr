@@ -19,12 +19,14 @@
 """
 Modules to compute the matching cost and solve the corresponding LSAP.
 """
+
 import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
 from torch import nn
 
 from rfdetr.util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+
 
 class HungarianMatcher(nn.Module):
     """This class computes an assignment between the targets and the predictions of the network
@@ -33,14 +35,16 @@ class HungarianMatcher(nn.Module):
     while the others are un-matched (and thus treated as non-objects).
     """
 
-    def __init__(self, 
-    cost_class: float = 1, 
-    cost_bbox: float = 1, 
-    cost_giou: float = 1, 
-    cost_mask:  float = 1,          # NEW
-    focal_alpha: float = 0.25, 
-    use_pos_only: bool = False,
-                 use_position_modulated_cost: bool = False):
+    def __init__(
+        self,
+        cost_class: float = 1,
+        cost_bbox: float = 1,
+        cost_giou: float = 1,
+        cost_mask: float = 1,  # NEW
+        focal_alpha: float = 0.25,
+        use_pos_only: bool = False,
+        use_position_modulated_cost: bool = False,
+    ):
         """Creates the matcher
         Params:
             cost_class: This is the relative weight of the classification error in the matching cost
@@ -51,28 +55,31 @@ class HungarianMatcher(nn.Module):
         self.cost_class = cost_class
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
-        self.cost_mask  = cost_mask     # NEW
+        self.cost_mask = cost_mask  # NEW
 
-        assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
+        assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, (
+            "all costs cant be 0"
+        )
         self.focal_alpha = focal_alpha
-
-
 
     @torch.no_grad()
     def forward(self, outputs, targets, group_detr=1):
         if "pred_masks" not in outputs:
-            raise KeyError("`pred_masks` missing – set `--masks` head or turn cost_mask=0")
+            raise KeyError(
+                "`pred_masks` missing – set `--masks` head or turn cost_mask=0"
+            )
 
         bs, num_queries = outputs["pred_logits"].shape[:2]
         bs, num_queries, Hm, Wm = outputs["pred_masks"].shape
 
         # We flatten to compute the cost matrices in a batch
-        out_prob = outputs["pred_logits"].flatten(0, 1).sigmoid()  # [batch_size * num_queries, num_classes]
+        out_prob = (
+            outputs["pred_logits"].flatten(0, 1).sigmoid()
+        )  # [batch_size * num_queries, num_classes]
         out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
 
-
-        out_mask = outputs["pred_masks"].flatten(0, 1).sigmoid()      # [B*Q, Hm, Wm]
-            # gom Ground-truth masks, resize về cùng kích thước với pred
+        out_mask = outputs["pred_masks"].flatten(0, 1).sigmoid()  # [B*Q, Hm, Wm]
+        # gom Ground-truth masks, resize về cùng kích thước với pred
         tgt_masks = []
         for tgt in targets:
             # tgt["masks"]: [Nt, Horig, Worig] (bool/0-1 float)
@@ -81,38 +88,40 @@ class HungarianMatcher(nn.Module):
                 size=(Hm, Wm),
                 mode="bilinear",
                 align_corners=False,
-            )[:, 0]                             # (Nt,Hm,Wm)
+            )[:, 0]  # (Nt,Hm,Wm)
             tgt_masks.append(masks)
-        tgt_masks = torch.cat(tgt_masks, 0)     # [sum_Nt, Hm, Wm]
+        tgt_masks = torch.cat(tgt_masks, 0)  # [sum_Nt, Hm, Wm]
 
         # flatten để tính Dice nhanh
-        out_flat = out_mask.flatten(1)          # [B*Q, P]
-        tgt_flat = tgt_masks.flatten(1)         # [sum_Nt, P]
+        out_flat = out_mask.flatten(1)  # [B*Q, P]
+        tgt_flat = tgt_masks.flatten(1)  # [sum_Nt, P]
 
         # soft-Dice = 1 – Dice
         # Dice = 2*|A∩B| / (|A|+|B|)
         # Tính ma trận giao cắt bằng nhân ma trận
         #   out_flat:  (Nq,P)
         #   tgt_flatᵀ: (P,Nt)
-        inter = 2.0 * (out_flat.float() @ tgt_flat.t())              # [Nq, Nt]
+        inter = 2.0 * (out_flat.float() @ tgt_flat.t())  # [Nq, Nt]
         union = out_flat.sum(1, keepdim=True) + tgt_flat.sum(1)  # broadcast
-        cost_mask = 1.0 - (inter + 1.0) / (union + 1.0)      # [+eps]  => [Nq,Nt]
-
-
+        cost_mask = 1.0 - (inter + 1.0) / (union + 1.0)  # [+eps]  => [Nq,Nt]
 
         # Also concat the target labels and boxes
         tgt_ids = torch.cat([v["labels"] for v in targets])
         tgt_bbox = torch.cat([v["boxes"] for v in targets])
 
         # Compute the giou cost betwen boxes
-        giou = generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
+        giou = generalized_box_iou(
+            box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox)
+        )
         cost_giou = -giou
 
         # Compute the classification cost.
         alpha = 0.25
         gamma = 2.0
-        
-        neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
+
+        neg_cost_class = (
+            (1 - alpha) * (out_prob**gamma) * (-(1 - out_prob + 1e-8).log())
+        )
         pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
         cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
 
@@ -121,13 +130,12 @@ class HungarianMatcher(nn.Module):
 
         # Final cost matrix
         C = (
-              self.cost_bbox * cost_bbox
-            + self.cost_class*cost_class
+            self.cost_bbox * cost_bbox
+            + self.cost_class * cost_class
             + self.cost_giou * cost_giou
-            + self.cost_mask * cost_mask            # NEW
+            + self.cost_mask * cost_mask  # NEW
         )
         C = C.view(bs, num_queries, -1).cpu()
-
 
         sizes = [len(v["boxes"]) for v in targets]
         indices = []
@@ -135,17 +143,27 @@ class HungarianMatcher(nn.Module):
         C_list = C.split(g_num_queries, dim=1)
         for g_i in range(group_detr):
             C_g = C_list[g_i]
-            indices_g = [linear_sum_assignment(c[i]) for i, c in enumerate(C_g.split(sizes, -1))]
+            indices_g = [
+                linear_sum_assignment(c[i]) for i, c in enumerate(C_g.split(sizes, -1))
+            ]
             if g_i == 0:
                 indices = indices_g
             else:
                 indices = [
-                    (np.concatenate([indice1[0], indice2[0] + g_num_queries * g_i]), np.concatenate([indice1[1], indice2[1]]))
+                    (
+                        np.concatenate([indice1[0], indice2[0] + g_num_queries * g_i]),
+                        np.concatenate([indice1[1], indice2[1]]),
+                    )
                     for indice1, indice2 in zip(indices, indices_g)
                 ]
 
-
-        return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
+        return [
+            (
+                torch.as_tensor(i, dtype=torch.int64),
+                torch.as_tensor(j, dtype=torch.int64),
+            )
+            for i, j in indices
+        ]
 
 
 def build_matcher(args):
@@ -153,6 +171,6 @@ def build_matcher(args):
         cost_class=args.set_cost_class,
         cost_bbox=args.set_cost_bbox,
         cost_giou=args.set_cost_giou,
-        cost_mask=args.set_cost_dice,    
+        cost_mask=args.set_cost_dice,
         focal_alpha=args.focal_alpha,
     )

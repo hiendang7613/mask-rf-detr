@@ -4,17 +4,20 @@
 # Licensed under the Apache License, Version 2.0 [see LICENSE for details]
 # ------------------------------------------------------------------------
 
+import json
+import math
+import os
+import types
+
 import torch
 import torch.nn as nn
-from transformers import AutoBackbone
 import torch.nn.functional as F
-import types
-import math
-import json
-import os
+from transformers import AutoBackbone
 
-from .dinov2_with_windowed_attn import WindowedDinov2WithRegistersConfig, WindowedDinov2WithRegistersBackbone
-
+from .dinov2_with_windowed_attn import (
+    WindowedDinov2WithRegistersBackbone,
+    WindowedDinov2WithRegistersConfig,
+)
 
 size_to_width = {
     "tiny": 192,
@@ -35,6 +38,7 @@ size_to_config_with_registers = {
     "large": "dinov2_with_registers_large.json",
 }
 
+
 def get_config(size, use_registers):
     config_dict = size_to_config_with_registers if use_registers else size_to_config
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -46,18 +50,35 @@ def get_config(size, use_registers):
 
 
 class DinoV2(nn.Module):
-    def __init__(self, shape=(640, 640), out_feature_indexes=[2, 4, 5, 9], size="base", use_registers=True, use_windowed_attn=True, gradient_checkpointing=False, load_dinov2_weights=True):
+    def __init__(
+        self,
+        shape=(640, 640),
+        out_feature_indexes=[2, 4, 5, 9],
+        size="base",
+        use_registers=True,
+        use_windowed_attn=True,
+        gradient_checkpointing=False,
+        load_dinov2_weights=True,
+    ):
         super().__init__()
 
-        name = f"facebook/dinov2-with-registers-{size}" if use_registers else f"facebook/dinov2-{size}"
+        name = (
+            f"facebook/dinov2-with-registers-{size}"
+            if use_registers
+            else f"facebook/dinov2-{size}"
+        )
 
         self.shape = shape
-        
+
         # Create the encoder
-        
+
         if not use_windowed_attn:
-            assert not gradient_checkpointing, "Gradient checkpointing is not supported for non-windowed attention"
-            assert load_dinov2_weights, "Using non-windowed attention requires loading dinov2 weights from hub"
+            assert not gradient_checkpointing, (
+                "Gradient checkpointing is not supported for non-windowed attention"
+            )
+            assert load_dinov2_weights, (
+                "Using non-windowed attention requires loading dinov2 weights from hub"
+            )
             self.encoder = AutoBackbone.from_pretrained(
                 name,
                 out_features=[f"stage{i}" for i in out_feature_indexes],
@@ -88,11 +109,14 @@ class DinoV2(nn.Module):
                     num_register_tokens=0,
                     gradient_checkpointing=gradient_checkpointing,
                 )
-            self.encoder = WindowedDinov2WithRegistersBackbone.from_pretrained(
-                name,
-                config=windowed_dino_config,
-            ) if load_dinov2_weights else WindowedDinov2WithRegistersBackbone(windowed_dino_config)
-
+            self.encoder = (
+                WindowedDinov2WithRegistersBackbone.from_pretrained(
+                    name,
+                    config=windowed_dino_config,
+                )
+                if load_dinov2_weights
+                else WindowedDinov2WithRegistersBackbone(windowed_dino_config)
+            )
 
         self._out_feature_channels = [size_to_width[size]] * len(out_feature_indexes)
         self._export = False
@@ -102,10 +126,10 @@ class DinoV2(nn.Module):
             return
         self._export = True
         shape = self.shape
+
         def make_new_interpolated_pos_encoding(
             position_embeddings, patch_size, height, width
         ):
-
             num_positions = position_embeddings.shape[1] - 1
             dim = position_embeddings.shape[-1]
             height = height // patch_size
@@ -144,6 +168,7 @@ class DinoV2(nn.Module):
             )
         # Create a new Parameter with the new size
         old_interpolate_pos_encoding = self.encoder.embeddings.interpolate_pos_encoding
+
         def new_interpolate_pos_encoding(self_mod, embeddings, height, width):
             num_patches = embeddings.shape[1] - 1
             num_positions = self_mod.position_embeddings.shape[1] - 1
@@ -153,14 +178,16 @@ class DinoV2(nn.Module):
 
         self.encoder.embeddings.position_embeddings = nn.Parameter(new_positions)
         self.encoder.embeddings.interpolate_pos_encoding = types.MethodType(
-            new_interpolate_pos_encoding, 
-            self.encoder.embeddings
+            new_interpolate_pos_encoding, self.encoder.embeddings
         )
 
     def forward(self, x):
-        assert x.shape[2] % 14 == 0 and x.shape[3] % 14 == 0, f"Dinov2 requires input shape to be divisible by 14, but got {x.shape}"
+        assert x.shape[2] % 14 == 0 and x.shape[3] % 14 == 0, (
+            f"Dinov2 requires input shape to be divisible by 14, but got {x.shape}"
+        )
         x = self.encoder(x)
         return list(x[0])
+
 
 if __name__ == "__main__":
     model = DinoV2()
